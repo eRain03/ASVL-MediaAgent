@@ -1,0 +1,79 @@
+version: '3.8'
+
+services:
+  # Frontend (Vite + React)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - api
+
+  # Backend API (FastAPI)
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uvicorn asvl.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/asvl
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - .:/app
+      - ./videos:/app/videos
+      - ./clips:/app/clips
+      - ./logs:/app/logs
+    depends_on:
+      - db
+      - redis
+
+  # Celery Worker
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A asvl.workers.celery_app worker --loglevel=info --concurrency=4 -Q asr,llm,clip,vl,fusion,default
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/asvl
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - .:/app
+      - ./videos:/app/videos
+      - ./clips:/app/clips
+      - ./logs:/app/logs
+    depends_on:
+      - db
+      - redis
+
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=asvl
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  postgres_data:
+  redis_data:
