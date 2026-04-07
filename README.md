@@ -131,6 +131,20 @@ if cache.get(video_hash):
 ```
 
 ---
+### 任务调度层
+```text
+            API层
+              ↓
+        任务队列（Kafka / Redis）
+              ↓
+ ┌────────┬────────┬────────┬────────┐
+ ↓        ↓        ↓        ↓        ↓
+ASR    LLM    Clip    VL    Fusion
+Worker Worker Worker Worker Worker
+```
+
+---
+---
 
 ## 📊 处理流程
 
