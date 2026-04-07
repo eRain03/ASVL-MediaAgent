@@ -388,13 +388,10 @@ asvl/
 
 ---
 
-## 🙏 致谢
+## 🙏 致谢服务商
 
 - [阿里云ASR](https://www.aliyun.com/product/nls) - 语音识别服务
 - [qwen3-vl-plus](https://qwenlm.github.io/) - 多模态大模型
-- [FFmpeg](https://ffmpeg.org/) - 视频处理工具
-- [FastAPI](https://fastapi.tiangolo.com/) - Web框架
-
 ---
 
 <div align="center">
