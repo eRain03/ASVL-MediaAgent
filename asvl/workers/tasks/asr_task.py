@@ -206,6 +206,8 @@ async def _save_asr_result(
                 "end": s.end,
                 "text": s.text,
                 "confidence": s.confidence,
+                "speaker_id": s.speaker_id,  # 说话人ID
+                "audio_events": s.audio_events,  # 音频事件
             }
             for s in segments
         ]
