@@ -167,7 +167,8 @@ class SiliconFlowASR(ASRBase):
 
         timeout = aiohttp.ClientTimeout(total=300)  # 5分钟超时
 
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        # trust_env=True 允许使用环境变量中的代理设置
+        async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
             try:
                 async with session.post(
                     self.API_URL,
