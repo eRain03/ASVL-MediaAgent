@@ -53,6 +53,7 @@ class AliyunASR(ASRBase):
         audio_path: str,
         language: Optional[str] = "zh",
         enable_words: bool = True,
+        enable_diarization: bool = False,  # 新增：启用说话人分离
     ) -> ASRResult:
         """
         转录音频文件
@@ -61,6 +62,7 @@ class AliyunASR(ASRBase):
             audio_path: 音频文件路径
             language: 语言代码
             enable_words: 是否启用词级时间戳
+            enable_diarization: 是否启用说话人分离（返回 speaker_id）
 
         Returns:
             ASRResult: 转录结果
@@ -86,6 +88,7 @@ class AliyunASR(ASRBase):
             audio_data=audio_data,
             language=language,
             enable_words=enable_words,
+            enable_diarization=enable_diarization,
         ):
             segments.extend(result)
 
@@ -99,7 +102,8 @@ class AliyunASR(ASRBase):
 
         log.info(
             f"ASR completed: {len(segments)} segments, "
-            f"duration={duration:.1f}s, time={processing_time:.1f}s"
+            f"duration={duration:.1f}s, time={processing_time:.1f}s, "
+            f"diarization={enable_diarization}"
         )
 
         return ASRResult(
@@ -114,6 +118,7 @@ class AliyunASR(ASRBase):
         audio_data: bytes,
         language: str = "zh",
         enable_words: bool = True,
+        enable_diarization: bool = False,  # 新增参数
     ) -> AsyncGenerator[List[ASRSegment], None]:
         """
         流式识别
@@ -122,6 +127,7 @@ class AliyunASR(ASRBase):
             audio_data: 音频数据
             language: 语言
             enable_words: 词级时间戳
+            enable_diarization: 说话人分离
 
         Yields:
             List[ASRSegment]: 识别分段列表
@@ -139,6 +145,7 @@ class AliyunASR(ASRBase):
                 token=token,
                 language=language,
                 enable_words=enable_words,
+                enable_diarization=enable_diarization,
             )
 
             # 发送音频数据
@@ -175,8 +182,24 @@ class AliyunASR(ASRBase):
         token: str,
         language: str,
         enable_words: bool,
+        enable_diarization: bool = False,  # 新增参数
     ) -> None:
         """发送开始帧"""
+        payload = {
+            "format": "pcm",
+            "sample_rate": 16000,
+            "enable_intermediate_result": True,
+            "enable_punctuation_prediction": True,
+            "enable_inverse_text_normalization": True,
+            "enable_words": enable_words,
+            "language": language,
+        }
+
+        # 启用说话人分离
+        if enable_diarization:
+            payload["enable_diarization"] = True
+            payload["diarization_speaker_count"] = 2  # 预设说话人数量
+
         frame = {
             "header": {
                 "appkey": self.app_key,
@@ -186,15 +209,7 @@ class AliyunASR(ASRBase):
                 "name": "RecognitionStarted",
                 "status_text": "SUCCESS",
             },
-            "payload": {
-                "format": "pcm",
-                "sample_rate": 16000,
-                "enable_intermediate_result": True,
-                "enable_punctuation_prediction": True,
-                "enable_inverse_text_normalization": True,
-                "enable_words": enable_words,
-                "language": language,
-            },
+            "payload": payload,
         }
         await ws.send(json.dumps(frame))
 
@@ -226,11 +241,15 @@ class AliyunASR(ASRBase):
         if confidence:
             confidence = confidence / 100.0  # 0-100 -> 0-1
 
+        # 提取说话人ID（如果启用了说话人分离）
+        speaker_id = sentence.get("speaker_id")
+
         return ASRSegment(
             start=begin_time,
             end=end_time,
             text=text.strip(),
             confidence=confidence,
+            speaker_id=speaker_id,  # 新增字段
         )
 
     async def _get_token(self) -> str:

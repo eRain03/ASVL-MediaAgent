@@ -18,16 +18,21 @@ class SiliconFlowASR(ASRBase):
     特点：
     - 无时间戳返回，需生成伪时间戳
     - 支持 TeleAI/TeleSpeechASR 和 FunAudioLLM/SenseVoiceSmall 模型
+    - SenseVoice 支持 audio_events 检测（Speech/BGM/Music等）
     - 文件限制：≤1小时, ≤50MB
     """
 
     API_URL = "https://api.siliconflow.cn/v1/audio/transcriptions"
+
+    # SenseVoice 音频事件标签格式
+    AUDIO_EVENT_PATTERN = r'<\|(\w+)\|>'
 
     def __init__(
         self,
         api_key: str,
         model: str = "TeleAI/TeleSpeechASR",
         chars_per_second: float = 4.0,  # 中文语速估计
+        enable_audio_events: bool = False,  # 启用音频事件检测
     ):
         """
         初始化硅基流动 ASR
@@ -36,11 +41,14 @@ class SiliconFlowASR(ASRBase):
             api_key: API密钥
             model: 模型名称 (TeleAI/TeleSpeechASR 或 FunAudioLLM/SenseVoiceSmall)
             chars_per_second: 语速估计（字符/秒），用于生成伪时间戳
+            enable_audio_events: 是否解析音频事件（仅SenseVoice支持）
         """
         self.api_key = api_key
         self.model = model
         self.chars_per_second = chars_per_second
-        log.info(f"SiliconFlowASR initialized: model={model}")
+        # 只有 SenseVoice 模型支持音频事件
+        self.enable_audio_events = enable_audio_events and "SenseVoice" in model
+        log.info(f"SiliconFlowASR initialized: model={model}, audio_events={self.enable_audio_events}")
 
     async def transcribe(
         self,
@@ -76,8 +84,11 @@ class SiliconFlowASR(ASRBase):
         # 2. 获取音频时长
         duration = await self._get_audio_duration(audio_path)
 
-        # 3. 生成伪时间戳分段
-        segments = self._generate_pseudo_segments(text, duration)
+        # 3. 根据模型选择解析方式
+        if self.enable_audio_events:
+            segments = self._parse_sensevoice_output(text, duration)
+        else:
+            segments = self._generate_pseudo_segments(text, duration)
 
         # 4. 计算平均置信度
         avg_confidence = sum(s.confidence for s in segments) / len(segments) if segments else 0.0
@@ -285,3 +296,80 @@ class SiliconFlowASR(ASRBase):
             sentences.append(parts[-1].strip())
 
         return sentences
+
+    def _parse_sensevoice_output(
+        self,
+        text: str,
+        duration: float,
+    ) -> List[ASRSegment]:
+        """
+        解析 SenseVoice 输出（包含音频事件标签）
+
+        SenseVoice 输出格式示例：
+        "<|Speech|><|BGM|><|Music|>大家好，欢迎来到今天的直播<|Speech|>"
+
+        Args:
+            text: SenseVoice 返回的原始文本
+            duration: 音频时长（秒）
+
+        Returns:
+            List[ASRSegment]: 包含音频事件的分段列表
+        """
+        if not text or duration <= 0:
+            return []
+
+        # 1. 提取所有音频事件标签
+        audio_events = []
+        for match in re.finditer(self.AUDIO_EVENT_PATTERN, text):
+            event = match.group(1)
+            audio_events.append(event)
+
+        log.info(f"Detected audio events: {audio_events}")
+
+        # 2. 清理标签，获取纯文本
+        clean_text = re.sub(self.AUDIO_EVENT_PATTERN, '', text)
+
+        if not clean_text.strip():
+            # 如果只有标签没有文本，返回一个带音频事件的空分段
+            return [ASRSegment(
+                start=0.0,
+                end=duration,
+                text="[音频内容]",
+                confidence=0.85,
+                audio_events=audio_events,
+            )]
+
+        # 3. 分割句子
+        sentences = self._split_sentences(clean_text)
+
+        if not sentences:
+            return []
+
+        # 4. 生成分段，每个分段携带音频事件信息
+        segments = []
+        current_time = 0.0
+        sentence_pause = 0.3
+
+        for sent in sentences:
+            if not sent.strip():
+                continue
+
+            char_count = len(sent)
+            sent_duration = char_count / self.chars_per_second
+            end_time = min(current_time + sent_duration, duration)
+
+            if end_time > current_time:
+                segments.append(ASRSegment(
+                    start=current_time,
+                    end=end_time,
+                    text=sent.strip(),
+                    confidence=0.85,
+                    audio_events=audio_events.copy(),  # 继承全局音频事件
+                ))
+
+            current_time = end_time + sentence_pause
+
+            if current_time >= duration:
+                break
+
+        return segments
