@@ -44,6 +44,10 @@ class ASRSegment(BaseModel):
     text: str = Field(description="文本内容")
     confidence: float = Field(ge=0, le=1, description="置信度")
 
+    # 新增：音频类型字段
+    speaker_id: Optional[str] = Field(default=None, description="说话人ID")
+    audio_events: Optional[List[str]] = Field(default_factory=list, description="音频事件类型")
+
 
 class ASRResult(BaseModel):
     """ASR结果"""
@@ -102,6 +106,14 @@ class AlignmentIssue(BaseModel):
     reason: Optional[str] = None
 
 
+class UserAttraction(BaseModel):
+    """用户看点分析"""
+    attraction_type: str = Field(description="看点类型")
+    description: str = Field(description="详细说明")
+    confidence: float = Field(ge=0, le=1, description="置信度")
+    evidence: List[str] = Field(default_factory=list, description="支撑证据")
+
+
 class Highlight(BaseModel):
     """高亮片段"""
     type: SegmentType
@@ -110,6 +122,10 @@ class Highlight(BaseModel):
     importance: float = Field(ge=0, le=1)
     visual_explanation: Optional[str] = None
     clip_url: Optional[str] = None
+
+    # 新增：用户看点分析
+    user_attraction: Optional[UserAttraction] = Field(default=None, description="用户看点分析")
+    audio_context: Optional[str] = Field(default=None, description="音频上下文描述")
 
 
 class TaskResult(BaseModel):
