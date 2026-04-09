@@ -40,6 +40,7 @@ def get_asr_provider(provider: Optional[str] = None) -> ASRBase:
         return SiliconFlowASR(
             api_key=settings.SILICONFLOW_ASR_API_KEY,
             model=settings.SILICONFLOW_ASR_MODEL,
+            enable_audio_events=settings.ASR_ENABLE_AUDIO_EVENTS,
         )
     elif provider == "aliyun":
         if not all([settings.ALIYUN_ASR_APP_KEY, settings.ALIYUN_ASR_ACCESS_KEY]):
