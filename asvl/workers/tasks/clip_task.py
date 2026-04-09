@@ -153,6 +153,12 @@ async def _get_video_path(task_id: str, video_url: str = None) -> str:
     if os.path.exists(local_path):
         return local_path
 
+    # 处理 file:// 协议的本地文件
+    if video_url and video_url.startswith("file://"):
+        file_path = video_url[7:]  # 移除 "file://" 前缀
+        if os.path.exists(file_path):
+            return file_path
+
     # 已上传的本地视频直接复用
     if video_url and os.path.exists(video_url):
         return video_url

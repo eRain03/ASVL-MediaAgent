@@ -1,8 +1,9 @@
 """信息融合器"""
 from typing import List, Dict, Optional
 from asvl.core.llm.client import LLMClient
-from asvl.models.schemas import LLMResult, VLResult, Highlight
+from asvl.models.schemas import LLMResult, VLResult, Highlight, AlignmentIssue, UserAttraction
 from asvl.models.enums import SegmentType
+from asvl.core.fusion.attraction_analyzer import AttractionAnalyzer
 from configs.prompts.fusion_prompt import FUSION_PROMPT
 from configs.settings import get_settings
 from configs.logging import log
@@ -19,17 +20,21 @@ class InfoFusioner:
     - 多源信息聚合
     - 权重计算
     - 冲突解决
+    - 看点分析
     """
 
     def __init__(self, llm_client: Optional[LLMClient] = None):
         self.llm = llm_client or LLMClient()
+        self.attraction_analyzer = AttractionAnalyzer(llm_client)
         log.info("InfoFusioner initialized")
 
     async def merge(
         self,
         llm_results: List[LLMResult],
         vl_results: Dict[str, VLResult],
-        min_importance: float = 0.5,
+        min_importance: float = 0.3,  # 降低阈值，确保更多内容生成高亮
+        alignment_issues: Optional[List[AlignmentIssue]] = None,
+        audio_events_map: Optional[Dict[str, List[str]]] = None,
     ) -> List[Highlight]:
         """
         信息融合
@@ -38,11 +43,18 @@ class InfoFusioner:
             llm_results: LLM分析结果列表
             vl_results: VL分析结果字典
             min_importance: 最小重要性阈值
+            alignment_issues: 对齐问题列表（用于看点分析）
+            audio_events_map: 音频事件映射（用于看点分析）
 
         Returns:
             List[Highlight]: 高亮片段列表
         """
         highlights = []
+
+        # 构建对齐问题索引
+        alignment_map = {}
+        if alignment_issues:
+            alignment_map = {a.segment_id: a for a in alignment_issues}
 
         for llm_result in llm_results:
             # 过滤低重要性分段
@@ -51,8 +63,24 @@ class InfoFusioner:
 
             vl_result = vl_results.get(llm_result.id)
 
+            # 获取对齐问题
+            alignment = alignment_map.get(llm_result.id)
+
+            # 获取音频事件
+            audio_events = None
+            if audio_events_map:
+                # 先尝试精确时间匹配
+                time_key = f"{llm_result.start}-{llm_result.end}"
+                audio_events = audio_events_map.get(time_key)
+
+                # 如果没有精确匹配，使用全局音频事件
+                if not audio_events and "_global" in audio_events_map:
+                    audio_events = audio_events_map["_global"]
+
             try:
-                highlight = await self._fuse_single(llm_result, vl_result)
+                highlight = await self._fuse_single(
+                    llm_result, vl_result, alignment, audio_events
+                )
                 highlights.append(highlight)
             except Exception as e:
                 log.error(f"Fusion failed for {llm_result.id}: {e}")
@@ -70,8 +98,20 @@ class InfoFusioner:
         self,
         llm_result: LLMResult,
         vl_result: Optional[VLResult],
+        alignment_issue: Optional[AlignmentIssue] = None,
+        audio_events: Optional[List[str]] = None,
     ) -> Highlight:
         """融合单个分段"""
+        # 看点分析
+        user_attraction = None
+        if self.attraction_analyzer.enabled:
+            user_attraction = await self.attraction_analyzer.analyze(
+                llm_result, vl_result, alignment_issue, audio_events
+            )
+
+        # 音频上下文
+        audio_context = self._build_audio_context(audio_events)
+
         if vl_result:
             # 使用LLM融合
             prompt = FUSION_PROMPT.format(
@@ -98,10 +138,33 @@ class InfoFusioner:
                 visual_explanation=response.get("visual_explanation"),
                 time=[llm_result.start, llm_result.end],
                 importance=response.get("importance", llm_result.importance),
+                user_attraction=user_attraction,
+                audio_context=audio_context,
             )
         else:
             # 无VL结果，直接使用LLM结果
-            return self._simple_fuse(llm_result, None)
+            highlight = self._simple_fuse(llm_result, None)
+            highlight.user_attraction = user_attraction
+            highlight.audio_context = audio_context
+            return highlight
+
+    def _build_audio_context(self, audio_events: Optional[List[str]]) -> Optional[str]:
+        """构建音频上下文描述"""
+        if not audio_events:
+            return None
+
+        # 判断主要音频类型
+        has_speech = "Speech" in audio_events
+        has_bgm = "BGM" in audio_events or "Music" in audio_events
+
+        if has_speech and has_bgm:
+            return "人声+背景音乐"
+        elif has_speech:
+            return "有人声讲解"
+        elif has_bgm:
+            return "背景音乐"
+        else:
+            return f"音频类型: {', '.join(audio_events)}"
 
     def _simple_fuse(
         self,

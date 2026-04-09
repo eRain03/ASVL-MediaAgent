@@ -9,7 +9,8 @@ import {
   Eye,
   Brain,
   ArrowRight,
-  Loader2
+  Loader2,
+  Wand2
 } from 'lucide-react'
 import { taskApi, videoApi } from '@/lib/api'
 import toast from 'react-hot-toast'
@@ -80,7 +81,7 @@ export default function HomePage() {
     {
       icon: Video,
       title: 'ASR 语音识别',
-      description: '阿里云ASR精确转录，支持句级时间戳',
+      description: '硅基流动SenseVoice精确转录，支持音频事件检测',
       color: 'from-blue-500 to-cyan-500',
     },
     {
@@ -98,7 +99,7 @@ export default function HomePage() {
     {
       icon: Zap,
       title: '智能融合',
-      description: '双模态对齐、冲突检测、语义增强',
+      description: '双模态对齐、冲突检测、看点分析',
       color: 'from-amber-500 to-orange-500',
     },
   ]
@@ -190,17 +191,45 @@ export default function HomePage() {
                     )}
                   </button>
                 </div>
-                {/* Force VL Option */}
-                <div className="mt-3 flex items-center justify-center gap-2">
-                  <input
-                    type="checkbox"
-                    id="forceVl"
-                    checked={forceVl}
-                    onChange={(e) => setForceVl(e.target.checked)}
-                    className="w-4 h-4 rounded border-white/20 bg-white/5 text-primary-500 focus:ring-primary-500"
-                  />
-                  <label htmlFor="forceVl" className="text-sm text-white/60 cursor-pointer">
-                    强制启用视觉分析（忽略文本判断，对关键帧进行分析）
+                {/* 深度分析选项 */}
+                <div className="mt-4 flex justify-center">
+                  <label
+                    htmlFor="deepAnalysis"
+                    className={`flex items-center gap-3 px-4 py-2 rounded-xl cursor-pointer transition-all ${
+                      forceVl
+                        ? 'bg-gradient-to-r from-accent-500/20 to-primary-500/20 border border-accent-500/30'
+                        : 'bg-white/5 border border-white/10 hover:bg-white/10'
+                    }`}
+                  >
+                    <div className={`w-5 h-5 rounded-md flex items-center justify-center transition-colors ${
+                      forceVl
+                        ? 'bg-accent-500'
+                        : 'bg-white/10 border border-white/20'
+                    }`}>
+                      {forceVl && (
+                        <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                        </svg>
+                      )}
+                    </div>
+                    <input
+                      type="checkbox"
+                      id="deepAnalysis"
+                      checked={forceVl}
+                      onChange={(e) => setForceVl(e.target.checked)}
+                      className="hidden"
+                    />
+                    <Wand2 className={`w-4 h-4 transition-colors ${
+                      forceVl ? 'text-accent-400' : 'text-white/40'
+                    }`} />
+                    <span className={`text-sm font-medium transition-colors ${
+                      forceVl ? 'text-white' : 'text-white/60'
+                    }`}>
+                      深度分析
+                    </span>
+                    <span className="text-xs text-white/40">
+                      强制启用视觉分析
+                    </span>
                   </label>
                 </div>
               </div>

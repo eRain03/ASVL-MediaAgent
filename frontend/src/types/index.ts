@@ -86,6 +86,8 @@ export interface Highlight {
   importance: number
   visual_explanation?: string
   clip_url?: string
+  user_attraction?: UserAttraction
+  audio_context?: string
 }
 
 export interface AlignmentIssue {
@@ -104,6 +106,13 @@ export interface VLResultInfo {
   objects: string[]
   scene_description?: string
   confidence: number
+}
+
+export interface UserAttraction {
+  attraction_type: string
+  description: string
+  confidence: number
+  evidence: string[]
 }
 
 export interface TaskResult {

@@ -15,6 +15,7 @@ from asvl.db.repositories.task_repo import TaskRepository
 from asvl.db.models.final_output import FinalOutputModel
 from asvl.db.models.segment_result import SegmentResultModel
 from asvl.db.models.vl_result import VLResultModel
+from asvl.db.models.asr_result import ASRResultModel
 from asvl.models.schemas import LLMResult, VLResult, Highlight
 from asvl.models.enums import TaskStatus
 from configs.settings import get_settings
@@ -110,19 +111,27 @@ async def _process_fusion_async(
         aligner = CrossModalAligner(llm_client)
         alignment_issues = await aligner.batch_align(llm_segments, vl_dict)
 
-        # 7. 信息融合
+        # 7. 获取音频事件信息（用于看点分析）
+        audio_events_map = await _get_audio_events(session_factory, task_id)
+
+        # 8. 信息融合（传递对齐结果和音频事件）
         log.info("Fusing information...")
         fusioner = InfoFusioner(llm_client)
-        highlights = await fusioner.merge(llm_segments, vl_dict)
+        highlights = await fusioner.merge(
+            llm_segments,
+            vl_dict,
+            alignment_issues=alignment_issues,
+            audio_events_map=audio_events_map,
+        )
 
-        # 8. 语义增强
+        # 9. 语义增强
         log.info("Enhancing semantics...")
         enhancer = SemanticEnhancer(llm_client)
         for highlight in highlights:
             vl_result = vl_dict.get(highlight.type.value)  # 简化匹配
             await enhancer.enhance(highlight, vl_result)
 
-        # 9. 生成摘要（优先使用VL结果）
+        # 10. 生成摘要（优先使用VL结果）
         if vl_dict:
             # 有VL结果，基于视觉内容生成摘要
             vl_summaries = [vl.vision_summary for vl in vl_dict.values() if vl.vision_summary]
@@ -133,7 +142,7 @@ async def _process_fusion_async(
         else:
             summary = await enhancer.generate_summary(highlights)
 
-        # 10. 保存最终结果
+        # 11. 保存最终结果
         await _save_final_output(
             session_factory=session_factory,
             task_id=task_id,
@@ -142,10 +151,10 @@ async def _process_fusion_async(
             alignment_issues=alignment_issues,
         )
 
-        # 11. 更新任务进度为完成
+        # 12. 更新任务进度为完成
         await _update_task_progress(session_factory, task_id, "fusion", TaskStatus.COMPLETED)
 
-        # 12. 更新任务状态为完成
+        # 13. 更新任务状态为完成
         await _update_task_status(session_factory, task_id, TaskStatus.COMPLETED)
 
         processing_time = (datetime.now() - start_time).total_seconds()
@@ -212,6 +221,40 @@ async def _get_vl_results(session_factory, task_id: str) -> dict:
         }
 
 
+async def _get_audio_events(session_factory, task_id: str) -> dict:
+    """获取音频事件信息"""
+    from sqlalchemy import select
+
+    async with session_factory() as session:
+        result = await session.execute(
+            select(ASRResultModel).where(ASRResultModel.task_id == task_id)
+        )
+        asr_result = result.scalar_one_or_none()
+
+        if not asr_result or not asr_result.segments:
+            return {}
+
+        # 从segments中提取audio_events
+        # 方式1: 按时间范围索引
+        events_map = {}
+        all_events = set()
+
+        for seg in asr_result.segments:
+            start = seg.get("start", 0)
+            end = seg.get("end", 0)
+            audio_events = seg.get("audio_events", [])
+            if audio_events:
+                time_key = f"{start}-{end}"
+                events_map[time_key] = audio_events
+                all_events.update(audio_events)
+
+        # 方式2: 全局音频事件（用于时间不匹配时的fallback）
+        if all_events:
+            events_map["_global"] = list(all_events)
+
+        return events_map
+
+
 async def _save_final_output(
     session_factory,
     task_id: str,
@@ -222,16 +265,26 @@ async def _save_final_output(
     """保存最终输出"""
     async with session_factory() as session:
         # 转换为可序列化格式
-        highlights_data = [
-            {
+        highlights_data = []
+        for h in highlights:
+            h_data = {
                 "type": h.type.value if hasattr(h.type, 'value') else str(h.type),
                 "text": h.text,
                 "visual_explanation": h.visual_explanation,
                 "time": h.time,
                 "importance": h.importance,
             }
-            for h in highlights
-        ]
+            # 新增字段
+            if h.user_attraction:
+                h_data["user_attraction"] = {
+                    "attraction_type": h.user_attraction.attraction_type,
+                    "description": h.user_attraction.description,
+                    "confidence": h.user_attraction.confidence,
+                    "evidence": h.user_attraction.evidence,
+                }
+            if h.audio_context:
+                h_data["audio_context"] = h.audio_context
+            highlights_data.append(h_data)
 
         alignment_data = [
             {

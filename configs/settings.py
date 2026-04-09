@@ -32,8 +32,8 @@ class Settings(BaseSettings):
     ASR_PROVIDER: str = "siliconflow"  # 默认使用硅基流动
 
     # 硅基流动 ASR
-    SILICONFLOW_ASR_API_KEY: Optional[str] = None
-    SILICONFLOW_ASR_MODEL: str = "TeleAI/TeleSpeechASR"
+    SILICONFLOW_ASR_API_KEY: Optional[str] = "sk-aizfzsgqbyjyffjeqjtwvucidixofbghbcauqtmoaeisfnfa"
+    SILICONFLOW_ASR_MODEL: str = "FunAudioLLM/SenseVoiceSmall"  # SenseVoice支持音频事件检测
 
     # 阿里云 ASR
     ALIYUN_ASR_APP_KEY: Optional[str] = None
@@ -75,6 +75,13 @@ class Settings(BaseSettings):
     # 成本控制
     VL_TOP_K_PERCENT: float = 0.2  # 只处理Top 20%
     MAX_CLIPS_PER_VIDEO: int = 50
+
+    # ASR高级功能
+    ASR_ENABLE_DIARIZATION: bool = False   # 启用说话人分离（阿里云）
+    ASR_ENABLE_AUDIO_EVENTS: bool = True   # 启用音频事件检测（SenseVoice）
+
+    # 看点分析
+    ATTRACTION_ANALYSIS_ENABLED: bool = True  # 启用看点分析
 
     # Worker配置
     CELERY_WORKER_CONCURRENCY: int = 4
