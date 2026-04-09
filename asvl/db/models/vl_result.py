@@ -13,7 +13,8 @@ class VLResultModel(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     task_id = Column(String(64), ForeignKey("video_task.task_id"), nullable=False, index=True)
-    clip_id = Column(String(64), nullable=False)
+    clip_id = Column(String(64), nullable=True)
+    segment_id = Column(String(64), nullable=True, index=True)  # 关联的segment_id
     vision_summary = Column(Text, nullable=True)
     actions = Column(JSON, nullable=True)  # ["点击", "输入"]
     objects = Column(JSON, nullable=True)  # ["按钮", "菜单"]
@@ -23,4 +24,4 @@ class VLResultModel(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     def __repr__(self):
-        return f"<VLResultModel(task_id={self.task_id}, clip_id={self.clip_id})>"
+        return f"<VLResultModel(task_id={self.task_id}, segment_id={self.segment_id})>"
