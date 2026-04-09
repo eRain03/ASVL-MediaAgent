@@ -32,7 +32,7 @@ class InfoFusioner:
         self,
         llm_results: List[LLMResult],
         vl_results: Dict[str, VLResult],
-        min_importance: float = 0.5,
+        min_importance: float = 0.3,  # 降低阈值，确保更多内容生成高亮
         alignment_issues: Optional[List[AlignmentIssue]] = None,
         audio_events_map: Optional[Dict[str, List[str]]] = None,
     ) -> List[Highlight]:
@@ -69,8 +69,13 @@ class InfoFusioner:
             # 获取音频事件
             audio_events = None
             if audio_events_map:
+                # 先尝试精确时间匹配
                 time_key = f"{llm_result.start}-{llm_result.end}"
                 audio_events = audio_events_map.get(time_key)
+
+                # 如果没有精确匹配，使用全局音频事件
+                if not audio_events and "_global" in audio_events_map:
+                    audio_events = audio_events_map["_global"]
 
             try:
                 highlight = await self._fuse_single(

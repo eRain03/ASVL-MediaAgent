@@ -234,8 +234,11 @@ async def _get_audio_events(session_factory, task_id: str) -> dict:
         if not asr_result or not asr_result.segments:
             return {}
 
-        # 从segments中提取audio_events，按时间范围索引
+        # 从segments中提取audio_events
+        # 方式1: 按时间范围索引
         events_map = {}
+        all_events = set()
+
         for seg in asr_result.segments:
             start = seg.get("start", 0)
             end = seg.get("end", 0)
@@ -243,6 +246,11 @@ async def _get_audio_events(session_factory, task_id: str) -> dict:
             if audio_events:
                 time_key = f"{start}-{end}"
                 events_map[time_key] = audio_events
+                all_events.update(audio_events)
+
+        # 方式2: 全局音频事件（用于时间不匹配时的fallback）
+        if all_events:
+            events_map["_global"] = list(all_events)
 
         return events_map
 
