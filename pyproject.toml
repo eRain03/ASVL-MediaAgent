@@ -34,6 +34,10 @@ dependencies = [
     "oss2>=2.18.0",
     "websockets>=12.0",
 
+    # 图像处理（视频指纹）
+    "Pillow>=10.0.0",
+    "imagehash>=4.3.0",
+
     # 工具
     "pydantic>=2.6.0",
     "pydantic-settings>=2.2.0",

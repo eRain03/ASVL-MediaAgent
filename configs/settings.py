@@ -29,7 +29,13 @@ class Settings(BaseSettings):
     LLM_RETRY_COUNT: int = 3
 
     # ASR配置
-    ASR_PROVIDER: str = "aliyun"
+    ASR_PROVIDER: str = "siliconflow"  # 默认使用硅基流动
+
+    # 硅基流动 ASR
+    SILICONFLOW_ASR_API_KEY: Optional[str] = None
+    SILICONFLOW_ASR_MODEL: str = "TeleAI/TeleSpeechASR"
+
+    # 阿里云 ASR
     ALIYUN_ASR_APP_KEY: Optional[str] = None
     ALIYUN_ASR_ACCESS_KEY: Optional[str] = None
     ALIYUN_ASR_SECRET_KEY: Optional[str] = None
@@ -46,6 +52,25 @@ class Settings(BaseSettings):
     CLIP_PADDING_SECONDS: float = 2.0
     MIN_CLIP_DURATION: float = 5.0
     MAX_CLIP_DURATION: float = 300.0
+
+    # 流式处理
+    STREAM_AUDIO_ENABLED: bool = True  # 流式音频提取（不下载视频）
+    STREAM_CLIP_ENABLED: bool = True   # 流式视频裁剪
+
+    # 智能预筛选阈值
+    VIDEO_DURATION_THRESHOLDS: dict = {
+        "short": 30,    # ≤30秒：全量分析
+        "medium": 180,  # ≤3分钟：标准分析
+    }
+
+    # 视频指纹去重
+    DEDUP_ENABLED: bool = True
+    DEDUP_CACHE_TTL: int = 86400  # 24小时
+    DEDUP_SIMILARITY_THRESHOLD: int = 5  # Hamming距离阈值
+
+    # 采样分析配置
+    SAMPLE_SEGMENT_DURATION: float = 60.0  # 每段采样时长
+    SAMPLE_SEGMENT_COUNT: int = 3  # 采样段数
 
     # 成本控制
     VL_TOP_K_PERCENT: float = 0.2  # 只处理Top 20%
