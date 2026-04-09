@@ -18,14 +18,30 @@ class SiliconFlowASR(ASRBase):
     特点：
     - 无时间戳返回，需生成伪时间戳
     - 支持 TeleAI/TeleSpeechASR 和 FunAudioLLM/SenseVoiceSmall 模型
-    - SenseVoice 支持 audio_events 检测（Speech/BGM/Music等）
+    - SenseVoice 支持 audio_events 检测（通过emoji标记：🎼音乐, 😊情感等）
     - 文件限制：≤1小时, ≤50MB
     """
 
     API_URL = "https://api.siliconflow.cn/v1/audio/transcriptions"
 
-    # SenseVoice 音频事件标签格式
+    # SenseVoice 音频事件标签格式 (旧格式，部分API仍使用)
     AUDIO_EVENT_PATTERN = r'<\|(\w+)\|>'
+
+    # SenseVoice emoji标记映射
+    EMOJI_EVENT_MAP = {
+        '🎼': 'Music',      # 音乐
+        '🎵': 'Music',      # 音乐
+        '🎶': 'Music',      # 音乐
+        '🎤': 'Speech',     # 人声
+        '😊': 'Happy',      # 开心
+        '😢': 'Sad',        # 悲伤
+        '😠': 'Angry',      # 愤怒
+        '😨': 'Fear',       # 恐惧
+        '😲': 'Surprise',   # 惊讶
+        '😐': 'Neutral',    # 中性
+        '👏': 'Applause',   # 掌声
+        '😂': 'Laughter',   # 笑声
+    }
 
     def __init__(
         self,
@@ -305,8 +321,9 @@ class SiliconFlowASR(ASRBase):
         """
         解析 SenseVoice 输出（包含音频事件标签）
 
-        SenseVoice 输出格式示例：
-        "<|Speech|><|BGM|><|Music|>大家好，欢迎来到今天的直播<|Speech|>"
+        SenseVoice 输出格式：
+        - 旧格式: "<|Speech|><|BGM|>大家好"
+        - 新格式(emoji): "🎼这一次，我告别故乡😊"
 
         Args:
             text: SenseVoice 返回的原始文本
@@ -318,18 +335,30 @@ class SiliconFlowASR(ASRBase):
         if not text or duration <= 0:
             return []
 
-        # 1. 提取所有音频事件标签
+        # 1. 提取音频事件（支持两种格式）
         audio_events = []
+
+        # 格式1: <|Speech|> 标签格式
         for match in re.finditer(self.AUDIO_EVENT_PATTERN, text):
-            event = match.group(1)
-            audio_events.append(event)
+            audio_events.append(match.group(1))
+
+        # 格式2: emoji 标记格式
+        for char in text:
+            if char in self.EMOJI_EVENT_MAP:
+                event = self.EMOJI_EVENT_MAP[char]
+                if event not in audio_events:
+                    audio_events.append(event)
 
         log.info(f"Detected audio events: {audio_events}")
 
-        # 2. 清理标签，获取纯文本
+        # 2. 清理标签和emoji，获取纯文本
         clean_text = re.sub(self.AUDIO_EVENT_PATTERN, '', text)
+        # 移除emoji
+        for emoji in self.EMOJI_EVENT_MAP.keys():
+            clean_text = clean_text.replace(emoji, '')
+        clean_text = clean_text.strip()
 
-        if not clean_text.strip():
+        if not clean_text:
             # 如果只有标签没有文本，返回一个带音频事件的空分段
             return [ASRSegment(
                 start=0.0,
