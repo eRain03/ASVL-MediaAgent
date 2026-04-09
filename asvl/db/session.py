@@ -6,7 +6,32 @@ from configs.logging import log
 
 settings = get_settings()
 
-# 创建异步引擎
+# 基类
+Base = declarative_base()
+
+
+def get_new_engine():
+    """创建新的异步引擎（每个任务使用独立的引擎避免event loop问题）"""
+    return create_async_engine(
+        settings.DATABASE_URL,
+        echo=settings.DEBUG,
+        pool_size=1,  # 每个引擎只有一个连接，避免跨loop共享
+        max_overflow=0,
+    )
+
+
+def get_new_session_factory(engine=None):
+    """创建新的会话工厂"""
+    if engine is None:
+        engine = get_new_engine()
+    return async_sessionmaker(
+        engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
+
+
+# 保留全局引擎用于API（共享event loop）
 engine = create_async_engine(
     settings.DATABASE_URL,
     echo=settings.DEBUG,
@@ -20,9 +45,6 @@ async_session = async_sessionmaker(
     class_=AsyncSession,
     expire_on_commit=False,
 )
-
-# 基类
-Base = declarative_base()
 
 
 async def get_session() -> AsyncSession:
