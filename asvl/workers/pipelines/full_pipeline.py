@@ -54,7 +54,7 @@ class FullPipeline:
             process_asr.s(task_id, video_url, options),
 
             # 2. LLM处理（接收ASR结果）
-            process_llm.s(task_id),
+            process_llm.s(task_id),  # 实际调用: process_llm(asr_result, task_id)
 
             # 3. 视频裁剪（接收LLM结果）
             process_clip.s(task_id, video_url),

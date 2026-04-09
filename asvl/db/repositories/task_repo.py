@@ -1,6 +1,7 @@
 """任务Repository"""
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm.attributes import flag_modified
 from typing import Optional, List
 from asvl.db.models.video_task import VideoTask
 from asvl.models.enums import TaskStatus
@@ -17,8 +18,11 @@ class TaskRepository:
         self,
         task_id: str,
         video_id: str,
-        video_url: str,
+        video_url: Optional[str],
         options: Optional[dict] = None,
+        video_duration: Optional[float] = None,
+        video_hash: Optional[str] = None,
+        strategy: Optional[str] = None,
     ) -> VideoTask:
         """创建任务"""
         task = VideoTask(
@@ -28,6 +32,9 @@ class TaskRepository:
             options=options,
             status=TaskStatus.PENDING,
             progress={},
+            video_duration=video_duration,
+            video_hash=video_hash,
+            strategy=strategy,
         )
         self.session.add(task)
         await self.session.commit()
@@ -82,8 +89,9 @@ class TaskRepository:
             return None
 
         progress = task.progress or {}
-        progress[stage] = status
+        progress[stage] = status.value  # 使用字符串值，确保可序列化
         task.progress = progress
+        flag_modified(task, "progress")  # 显式标记JSON字段已修改
         task.updated_at = datetime.utcnow()
 
         await self.session.commit()

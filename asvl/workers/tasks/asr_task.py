@@ -7,8 +7,9 @@ from datetime import datetime
 import httpx
 
 from asvl.workers.celery_app import celery_app
-from asvl.core.asr import AliyunASR, AudioExtractor
-from asvl.db.session import async_session
+from asvl.core.asr import get_asr_provider, StreamingAudioExtractor, AudioExtractor
+from asvl.core.utils.video_info import get_video_info_from_url
+from asvl.db.session import get_new_engine, get_new_session_factory
 from asvl.db.repositories.task_repo import TaskRepository
 from asvl.db.models.asr_result import ASRResultModel
 from asvl.models.enums import TaskStatus
@@ -34,8 +35,12 @@ def process_asr(self, task_id: str, video_url: str, options: dict = None):
     """
     log.info(f"Starting ASR task for {task_id}")
 
-    # 在同步任务中运行异步代码
-    return asyncio.run(_process_asr_async(self, task_id, video_url, options or {}))
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(_process_asr_async(self, task_id, video_url, options or {}))
+    finally:
+        loop.close()
 
 
 async def _process_asr_async(
@@ -44,39 +49,66 @@ async def _process_asr_async(
     video_url: str,
     options: dict,
 ) -> dict:
-    """异步ASR处理"""
+    """异步ASR处理 - 支持流式提取和多种ASR Provider"""
     start_time = datetime.now()
+
+    # 为当前任务创建独立的引擎和会话工厂（在当前event loop中）
+    engine = get_new_engine()
+    session_factory = get_new_session_factory(engine)
 
     try:
         # 1. 更新任务状态
-        await _update_task_status(task_id, TaskStatus.PROCESSING, "asr")
+        await _update_task_status(session_factory, task_id, TaskStatus.PROCESSING, "asr")
 
-        # 2. 下载视频
-        log.info(f"Downloading video: {video_url}")
-        video_path = await _download_video(video_url, task_id)
+        # 2. 获取视频信息（用于流式处理）
+        log.info(f"Getting video info: {video_url}")
+        video_info = await get_video_info_from_url(video_url)
+        video_duration = video_info.duration
 
-        # 3. 提取音频
-        log.info(f"Extracting audio from: {video_path}")
-        audio_extractor = AudioExtractor()
-        audio_path = await audio_extractor.extract(video_path)
+        log.info(f"Video duration: {video_duration}s, has_audio: {video_info.has_audio}")
 
-        # 4. 检查视频时长，决定是否分段处理
-        video_duration = await audio_extractor._get_duration(video_path)
-        segment_duration = 600.0  # 10分钟分段
+        if not video_info.has_audio:
+            raise ValueError("Video has no audio stream")
 
-        if video_duration > segment_duration:
-            # 长视频分段处理
-            log.info(f"Long video detected ({video_duration}s), segmenting...")
-            audio_segments = await audio_extractor.extract_segments(
-                video_path, segment_duration=segment_duration
+        is_local_video = os.path.exists(video_url)
+
+        # 3. 决定处理策略
+        use_streaming = options.get("streaming", settings.STREAM_AUDIO_ENABLED) and not is_local_video
+        asr_provider = options.get("asr_provider", settings.ASR_PROVIDER)
+
+        # 4. 获取音频
+        if use_streaming:
+            # 流式提取：直接从URL提取音频，不下载视频
+            log.info("Using streaming audio extraction (no video download)")
+            audio_extractor = StreamingAudioExtractor()
+            temp_audio_path = f"temp/audio/{task_id}_audio.wav"
+            audio_path = await audio_extractor.extract_from_url(
+                video_url=video_url,
+                output_path=temp_audio_path,
             )
-        else:
-            # 短视频直接处理
             audio_segments = [{"path": audio_path, "start": 0, "duration": video_duration}]
+        else:
+            # 本地视频或传统方式：直接提取/必要时先下载
+            log.info("Using local/traditional audio extraction")
+            video_path = video_url if is_local_video else await _download_video(video_url, task_id)
+            audio_extractor = AudioExtractor()
+            audio_path = await audio_extractor.extract(video_path)
 
-        # 5. 调用ASR识别
+            # 检查是否需要分段
+            segment_duration = 600.0  # 10分钟
+            if video_duration > segment_duration:
+                log.info(f"Long video ({video_duration}s), segmenting...")
+                audio_segments = await audio_extractor.extract_segments(
+                    video_path, segment_duration=segment_duration
+                )
+            else:
+                audio_segments = [{"path": audio_path, "start": 0, "duration": video_duration}]
+
+        # 5. 调用 ASR 识别
         language = options.get("language", "zh")
-        asr = AliyunASR()
+        asr = get_asr_provider(asr_provider)
+
+        log.info(f"Using ASR provider: {asr_provider}")
 
         all_segments = []
         for seg_info in audio_segments:
@@ -84,7 +116,6 @@ async def _process_asr_async(
             result = await asr.transcribe(
                 audio_path=seg_info["path"],
                 language=language,
-                enable_words=True,
             )
 
             # 调整时间戳（分段处理时需要偏移）
@@ -95,6 +126,7 @@ async def _process_asr_async(
 
         # 6. 存储结果到数据库
         await _save_asr_result(
+            session_factory=session_factory,
             task_id=task_id,
             language=language,
             duration=video_duration,
@@ -103,12 +135,15 @@ async def _process_asr_async(
         )
 
         # 7. 更新任务进度
-        await _update_task_progress(task_id, "asr", TaskStatus.COMPLETED)
+        await _update_task_progress(session_factory, task_id, "asr", TaskStatus.COMPLETED)
 
         # 8. 清理临时文件
-        audio_extractor.cleanup(audio_path)
-        if os.path.exists(video_path):
-            os.remove(video_path)
+        for seg_info in audio_segments:
+            if os.path.exists(seg_info["path"]):
+                os.remove(seg_info["path"])
+
+        # 9. 关闭引擎
+        await engine.dispose()
 
         log.info(f"ASR task completed for {task_id}")
 
@@ -121,7 +156,8 @@ async def _process_asr_async(
 
     except Exception as e:
         log.error(f"ASR task failed for {task_id}: {e}")
-        await _update_task_status(task_id, TaskStatus.FAILED, "asr", str(e))
+        await _update_task_status(session_factory, task_id, TaskStatus.FAILED, "asr", str(e))
+        await engine.dispose()
         raise
 
 
@@ -148,6 +184,7 @@ async def _download_video(video_url: str, task_id: str) -> str:
 
 
 async def _save_asr_result(
+    session_factory,
     task_id: str,
     language: str,
     duration: float,
@@ -155,7 +192,7 @@ async def _save_asr_result(
     processing_time: float,
 ) -> None:
     """保存ASR结果到数据库"""
-    async with async_session() as session:
+    async with session_factory() as session:
         # 计算平均置信度
         avg_confidence = (
             sum(s.confidence for s in segments) / len(segments)
@@ -190,24 +227,26 @@ async def _save_asr_result(
 
 
 async def _update_task_status(
+    session_factory,
     task_id: str,
     status: TaskStatus,
     stage: str = None,
     error_message: str = None,
 ) -> None:
     """更新任务状态"""
-    async with async_session() as session:
+    async with session_factory() as session:
         repo = TaskRepository(session)
         await repo.update_status(task_id, status, error_message)
 
 
 async def _update_task_progress(
+    session_factory,
     task_id: str,
     stage: str,
     status: TaskStatus,
 ) -> None:
     """更新任务进度"""
-    async with async_session() as session:
+    async with session_factory() as session:
         repo = TaskRepository(session)
         await repo.update_progress(task_id, stage, status)
 
@@ -223,7 +262,12 @@ def get_asr_result(task_id: str) -> dict:
     Returns:
         dict: ASR结果
     """
-    return asyncio.run(_get_asr_result_async(task_id))
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(_get_asr_result_async(task_id))
+    finally:
+        loop.close()
 
 
 async def _get_asr_result_async(task_id: str) -> dict:
@@ -231,11 +275,16 @@ async def _get_asr_result_async(task_id: str) -> dict:
     from sqlalchemy import select
     from asvl.db.models.asr_result import ASRResultModel
 
-    async with async_session() as session:
+    engine = get_new_engine()
+    session_factory = get_new_session_factory(engine)
+
+    async with session_factory() as session:
         result = await session.execute(
             select(ASRResultModel).where(ASRResultModel.task_id == task_id)
         )
         asr_result = result.scalar_one_or_none()
+
+        await engine.dispose()
 
         if not asr_result:
             return {"error": "ASR result not found"}

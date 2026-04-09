@@ -152,7 +152,7 @@ export default function TasksPage() {
 
                 {/* Stage Labels */}
                 <div className="flex items-center gap-2 mt-2">
-                  {['ASR', 'LLM', 'Clip', 'VL', 'Fusion'].map((label, i) => (
+                  {['ASR', 'LLM', 'Clip', 'VL', 'Fusion'].map((label) => (
                     <div
                       key={label}
                       className="flex-1 text-center text-xs text-white/40"

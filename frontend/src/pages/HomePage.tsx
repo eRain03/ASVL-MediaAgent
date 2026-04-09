@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
@@ -11,36 +11,68 @@ import {
   ArrowRight,
   Loader2
 } from 'lucide-react'
-import { taskApi } from '@/lib/api'
+import { taskApi, videoApi } from '@/lib/api'
 import toast from 'react-hot-toast'
 
 export default function HomePage() {
   const navigate = useNavigate()
   const [videoUrl, setVideoUrl] = useState('')
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [loading, setLoading] = useState(false)
+  const [forceVl, setForceVl] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!videoUrl.trim()) {
-      toast.error('请输入视频URL')
+    if (!videoUrl.trim() && !selectedFile) {
+      toast.error('请输入视频URL或选择本地视频文件')
       return
     }
 
     setLoading(true)
     try {
-      const result = await taskApi.create({
-        video_url: videoUrl,
+      let payload: { video_url?: string; video_id?: string; options: { language: string; vl_enabled: boolean; force_vl?: boolean } } = {
         options: {
           language: 'zh',
           vl_enabled: true,
+          force_vl: forceVl,
         },
-      })
+      }
+
+      if (selectedFile) {
+        const uploadResult = await videoApi.upload(selectedFile)
+        payload = {
+          ...payload,
+          video_id: uploadResult.video_id,
+          video_url: uploadResult.video_url,
+        }
+      } else {
+        payload = {
+          ...payload,
+          video_url: videoUrl,
+        }
+      }
+
+      const result = await taskApi.create(payload)
       toast.success('任务创建成功！')
       navigate(`/tasks/${result.task_id}`)
     } catch (error: any) {
       toast.error(error.response?.data?.detail || '创建任务失败')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handlePickFile = () => {
+    fileInputRef.current?.click()
+  }
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] || null
+    setSelectedFile(file)
+    if (file) {
+      setVideoUrl('')
+      toast.success(`已选择文件：${file.name}`)
     }
   }
 
@@ -119,13 +151,26 @@ export default function HomePage() {
                     <input
                       type="url"
                       value={videoUrl}
-                      onChange={(e) => setVideoUrl(e.target.value)}
-                      placeholder="输入视频URL或上传视频文件..."
+                      onChange={(e) => {
+                        setVideoUrl(e.target.value)
+                        if (e.target.value) {
+                          setSelectedFile(null)
+                        }
+                      }}
+                      placeholder={selectedFile ? `已选择文件：${selectedFile.name}` : '输入视频URL或上传视频文件...'}
                       className="flex-1 bg-transparent border-none outline-none text-white placeholder-white/40"
+                    />
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="video/*"
+                      onChange={handleFileChange}
+                      className="hidden"
                     />
                   </div>
                   <button
                     type="button"
+                    onClick={handlePickFile}
                     className="p-3 rounded-xl bg-white/5 hover:bg-white/10 transition-colors"
                   >
                     <Upload className="w-5 h-5 text-white/60" />
@@ -144,6 +189,19 @@ export default function HomePage() {
                       </>
                     )}
                   </button>
+                </div>
+                {/* Force VL Option */}
+                <div className="mt-3 flex items-center justify-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="forceVl"
+                    checked={forceVl}
+                    onChange={(e) => setForceVl(e.target.checked)}
+                    className="w-4 h-4 rounded border-white/20 bg-white/5 text-primary-500 focus:ring-primary-500"
+                  />
+                  <label htmlFor="forceVl" className="text-sm text-white/60 cursor-pointer">
+                    强制启用视觉分析（忽略文本判断，对关键帧进行分析）
+                  </label>
                 </div>
               </div>
             </div>

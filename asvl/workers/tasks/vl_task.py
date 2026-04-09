@@ -7,7 +7,7 @@ from typing import List, Dict
 from asvl.workers.celery_app import celery_app
 from asvl.core.vl import QwenVLProcessor
 from asvl.core.llm.client import LLMClient
-from asvl.db.session import async_session
+from asvl.db.session import get_new_engine, get_new_session_factory
 from asvl.db.repositories.task_repo import TaskRepository
 from asvl.db.models.vl_result import VLResultModel
 from asvl.db.models.clip_result import ClipResultModel
@@ -23,40 +23,50 @@ settings = get_settings()
     bind=True,
     name="asvl.workers.tasks.vl_task.process_vl",
 )
-def process_vl(self, task_id: str, clips: list = None):
+def process_vl(self, clips: list, task_id: str):
     """
     VL视觉理解任务
 
     Args:
+        clips: 需要分析的片段列表（从上一个任务传递）
         task_id: 任务ID
-        clips: 需要分析的片段列表（可选）
 
     Returns:
         dict: 处理结果
     """
     log.info(f"Starting VL task for {task_id}")
-    return asyncio.run(_process_vl_async(self, task_id, clips))
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(_process_vl_async(self, clips, task_id))
+    finally:
+        loop.close()
 
 
 async def _process_vl_async(
     task,
-    task_id: str,
     clips: list,
+    task_id: str,
 ) -> dict:
     """异步VL处理"""
     start_time = datetime.now()
 
+    # 为当前任务创建独立的引擎和会话工厂（在当前event loop中）
+    engine = get_new_engine()
+    session_factory = get_new_session_factory(engine)
+
     try:
         # 1. 更新任务状态
-        await _update_task_progress(task_id, "vl", TaskStatus.PROCESSING)
+        await _update_task_progress(session_factory, task_id, "vl", TaskStatus.PROCESSING)
 
-        # 2. 获取需要分析的片段
-        if not clips:
-            clips = await _get_clip_results(task_id)
+        # 2. 获取需要分析的片段（如果没有提供或者是 dict 则从数据库获取）
+        if not clips or isinstance(clips, dict):
+            clips = await _get_clip_results(session_factory, task_id)
 
         if not clips:
             log.info(f"No clips to analyze for {task_id}")
-            await _update_task_progress(task_id, "vl", TaskStatus.COMPLETED)
+            await _update_task_progress(session_factory, task_id, "vl", TaskStatus.COMPLETED)
+            await engine.dispose()
             return {"task_id": task_id, "status": "skipped", "vl_results_count": 0}
 
         log.info(f"Processing {len(clips)} clips for VL analysis")
@@ -66,7 +76,7 @@ async def _process_vl_async(
         vl_processor = QwenVLProcessor(llm_client=llm_client)
 
         # 4. 获取相关文本（用于上下文）
-        segment_texts = await _get_segment_texts(task_id)
+        segment_texts = await _get_segment_texts(session_factory, task_id)
 
         # 5. 批量分析片段（串行处理，因为API限流）
         vl_results = []
@@ -89,7 +99,9 @@ async def _process_vl_async(
                     clip_path=clip_path,
                     segment_text=context,
                 )
-                result.clip_id = clip.get("clip_id", segment_id)
+                # 设置clip_id和segment_id
+                result.clip_id = os.path.basename(clip_path)
+                result.segment_id = segment_id  # 直接使用clip中的segment_id
 
                 vl_results.append(result)
 
@@ -98,13 +110,15 @@ async def _process_vl_async(
                 continue
 
         # 6. 保存VL结果
-        await _save_vl_results(task_id, vl_results)
+        await _save_vl_results(session_factory, task_id, vl_results)
 
         # 7. 更新任务进度
-        await _update_task_progress(task_id, "vl", TaskStatus.COMPLETED)
+        await _update_task_progress(session_factory, task_id, "vl", TaskStatus.COMPLETED)
 
         processing_time = (datetime.now() - start_time).total_seconds()
         log.info(f"VL task completed for {task_id}: {len(vl_results)} results in {processing_time:.1f}s")
+
+        await engine.dispose()
 
         return {
             "task_id": task_id,
@@ -115,15 +129,16 @@ async def _process_vl_async(
 
     except Exception as e:
         log.error(f"VL task failed for {task_id}: {e}")
-        await _update_task_progress(task_id, "vl", TaskStatus.FAILED)
+        await _update_task_progress(session_factory, task_id, "vl", TaskStatus.FAILED)
+        await engine.dispose()
         raise
 
 
-async def _get_clip_results(task_id: str) -> list:
+async def _get_clip_results(session_factory, task_id: str) -> list:
     """从数据库获取裁剪结果"""
     from sqlalchemy import select
 
-    async with async_session() as session:
+    async with session_factory() as session:
         result = await session.execute(
             select(ClipResultModel).where(ClipResultModel.task_id == task_id)
         )
@@ -141,12 +156,12 @@ async def _get_clip_results(task_id: str) -> list:
         ]
 
 
-async def _get_segment_texts(task_id: str) -> Dict[str, str]:
+async def _get_segment_texts(session_factory, task_id: str) -> Dict[str, str]:
     """获取分段文本（用于上下文）"""
     from sqlalchemy import select
     from asvl.db.models.segment_result import SegmentResultModel
 
-    async with async_session() as session:
+    async with session_factory() as session:
         result = await session.execute(
             select(SegmentResultModel).where(SegmentResultModel.task_id == task_id)
         )
@@ -161,13 +176,14 @@ async def _get_segment_texts(task_id: str) -> Dict[str, str]:
         }
 
 
-async def _save_vl_results(task_id: str, results: List[VLResult]) -> None:
+async def _save_vl_results(session_factory, task_id: str, results: List[VLResult]) -> None:
     """保存VL结果"""
-    async with async_session() as session:
+    async with session_factory() as session:
         for result in results:
             vl_model = VLResultModel(
                 task_id=task_id,
                 clip_id=result.clip_id,
+                segment_id=getattr(result, 'segment_id', None),  # 保存segment_id
                 vision_summary=result.vision_summary,
                 actions=result.actions,
                 objects=result.objects,
@@ -181,11 +197,12 @@ async def _save_vl_results(task_id: str, results: List[VLResult]) -> None:
 
 
 async def _update_task_progress(
+    session_factory,
     task_id: str,
     stage: str,
     status: TaskStatus,
 ) -> None:
     """更新任务进度"""
-    async with async_session() as session:
+    async with session_factory() as session:
         repo = TaskRepository(session)
         await repo.update_progress(task_id, stage, status)

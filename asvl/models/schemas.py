@@ -20,11 +20,12 @@ class TaskOptions(BaseModel):
     vl_enabled: bool = True
     vl_top_k: int = Field(default=20, ge=1, le=100)
     callback_url: Optional[str] = None
+    force_vl: bool = False  # 强制启用视觉分析
 
 
 class TaskCreateRequest(BaseModel):
     """创建任务请求"""
-    video_url: str
+    video_url: Optional[str] = None
     video_id: Optional[str] = None
     options: Optional[TaskOptions] = None
 
@@ -73,6 +74,7 @@ class SegmentResult(BaseModel):
 class VLResult(BaseModel):
     """VL视觉理解结果"""
     clip_id: str
+    segment_id: Optional[str] = None  # 关联的segment_id
     vision_summary: str
     actions: List[str] = Field(default_factory=list)
     objects: List[str] = Field(default_factory=list)
