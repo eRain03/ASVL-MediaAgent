@@ -13,11 +13,10 @@ import {
   Sparkles,
   AlertTriangle,
   Play,
-  Download
 } from 'lucide-react'
 import { taskApi } from '@/lib/api'
 import { cn, formatTimestamp, getSegmentTypeColor, getStatusColor } from '@/lib/utils'
-import type { TaskStatusResponse, TaskResult, LLMResult, Highlight } from '@/types'
+import type { TaskStatusResponse, TaskResult, LLMResult, Highlight, TaskProgress, VLResultInfo } from '@/types'
 import toast from 'react-hot-toast'
 
 export default function TaskDetailPage() {
@@ -25,7 +24,7 @@ export default function TaskDetailPage() {
   const [taskStatus, setTaskStatus] = useState<TaskStatusResponse | null>(null)
   const [taskResult, setTaskResult] = useState<TaskResult | null>(null)
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<'segments' | 'highlights' | 'alignment'>('highlights')
+  const [activeTab, setActiveTab] = useState<'segments' | 'highlights' | 'alignment' | 'asr' | 'vl'>('segments')
 
   useEffect(() => {
     if (!taskId) return
@@ -119,9 +118,9 @@ export default function TaskDetailPage() {
         {/* Progress Steps */}
         <div className="grid grid-cols-5 gap-4">
           {stages.map((stage, index) => {
-            const Icon = stage.icon
-            const isActive = taskStatus.progress[stage.key] === 'processing'
-            const isCompleted = taskStatus.progress[stage.key] === 'completed'
+            const stageKey = stage.key as keyof TaskProgress
+            const isActive = taskStatus.progress[stageKey] === 'processing'
+            const isCompleted = taskStatus.progress[stageKey] === 'completed'
 
             return (
               <motion.div
@@ -173,10 +172,12 @@ export default function TaskDetailPage() {
           )}
 
           {/* Tabs */}
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             {[
-              { key: 'highlights', label: '高亮片段', count: taskResult.highlights?.length || 0 },
               { key: 'segments', label: '所有分段', count: taskResult.segments?.length || 0 },
+              { key: 'vl', label: 'VL视觉分析', count: taskResult.vl_results?.length || 0 },
+              { key: 'highlights', label: '高亮片段', count: taskResult.highlights?.length || 0 },
+              { key: 'asr', label: 'ASR结果', count: taskResult.asr_segments?.length || 0 },
               { key: 'alignment', label: '对齐问题', count: taskResult.alignment_issues?.length || 0 },
             ].map((tab) => (
               <button
@@ -209,9 +210,65 @@ export default function TaskDetailPage() {
           {/* Segments Tab */}
           {activeTab === 'segments' && taskResult.segments && (
             <div className="space-y-3">
-              {taskResult.segments.map((segment, index) => (
-                <SegmentCard key={segment.id} segment={segment} index={index} />
-              ))}
+              {taskResult.segments.length === 0 ? (
+                <div className="glass rounded-xl p-8 text-center">
+                  <FileText className="w-12 h-12 text-white/20 mx-auto mb-3" />
+                  <div className="text-white/40">暂无分段数据</div>
+                </div>
+              ) : (
+                taskResult.segments.map((segment, index) => (
+                  <SegmentCard key={segment.id} segment={segment} index={index} />
+                ))
+              )}
+            </div>
+          )}
+
+          {/* ASR Tab */}
+          {activeTab === 'asr' && taskResult.asr_segments && (
+            <div className="space-y-3">
+              {taskResult.asr_segments.length === 0 ? (
+                <div className="glass rounded-xl p-8 text-center">
+                  <Video className="w-12 h-12 text-white/20 mx-auto mb-3" />
+                  <div className="text-white/40">暂无ASR结果</div>
+                </div>
+              ) : (
+                taskResult.asr_segments.map((segment, index) => (
+                  <motion.div
+                    key={index}
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: index * 0.03 }}
+                    className="glass rounded-lg p-4 hover:bg-white/5 transition-all"
+                  >
+                    <div className="flex items-center gap-3 mb-2">
+                      <span className="text-xs font-mono text-white/40">
+                        {formatTimestamp(segment.start)} - {formatTimestamp(segment.end)}
+                      </span>
+                      <span className="px-2 py-0.5 rounded text-xs bg-primary-500/20 text-primary-300">
+                        {Math.round(segment.confidence * 100)}% 置信度
+                      </span>
+                    </div>
+                    <p className="text-white/70 text-sm">{segment.text}</p>
+                  </motion.div>
+                ))
+              )}
+            </div>
+          )}
+
+          {/* VL Tab */}
+          {activeTab === 'vl' && (
+            <div className="space-y-4">
+              {(!taskResult.vl_results || taskResult.vl_results.length === 0) ? (
+                <div className="glass rounded-xl p-8 text-center">
+                  <Eye className="w-12 h-12 text-white/20 mx-auto mb-3" />
+                  <div className="text-white/40">暂无VL视觉分析结果</div>
+                  <div className="text-white/30 text-sm mt-2">当前视频没有需要视觉分析的分段</div>
+                </div>
+              ) : (
+                taskResult.vl_results?.map((vl, index) => (
+                  <VLResultCard key={vl.clip_id} vlResult={vl} index={index} />
+                ))
+              )}
             </div>
           )}
 
@@ -341,6 +398,72 @@ function SegmentCard({ segment, index }: { segment: LLMResult; index: number }) 
         )}
       </div>
       <p className="text-white/70 text-sm line-clamp-2">{segment.text}</p>
+    </motion.div>
+  )
+}
+
+function VLResultCard({ vlResult, index }: { vlResult: VLResultInfo; index: number }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: index * 0.05 }}
+      className="glass rounded-xl p-5 hover:bg-white/10 transition-all"
+    >
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-3">
+          <Eye className="w-5 h-5 text-accent-400" />
+          <span className="font-mono text-sm text-white/60">{vlResult.clip_id}</span>
+        </div>
+        <span className="px-2 py-0.5 rounded text-xs bg-accent-500/20 text-accent-300">
+          {Math.round(vlResult.confidence * 100)}% 置信度
+        </span>
+      </div>
+
+      {/* 视觉摘要 */}
+      <div className="mb-4">
+        <div className="text-xs text-white/40 mb-2 flex items-center gap-1">
+          <Sparkles className="w-3 h-3" />
+          视觉摘要
+        </div>
+        <p className="text-white/80 leading-relaxed">{vlResult.vision_summary}</p>
+      </div>
+
+      {/* 场景描述 */}
+      {vlResult.scene_description && (
+        <div className="mb-4 p-3 rounded-lg bg-white/5">
+          <div className="text-xs text-white/40 mb-1">场景描述</div>
+          <p className="text-white/70 text-sm">{vlResult.scene_description}</p>
+        </div>
+      )}
+
+      {/* 动作和物体 */}
+      <div className="grid md:grid-cols-2 gap-4">
+        {vlResult.actions && vlResult.actions.length > 0 && (
+          <div>
+            <div className="text-xs text-white/40 mb-2">识别动作</div>
+            <div className="flex flex-wrap gap-2">
+              {vlResult.actions.map((action, i) => (
+                <span key={i} className="px-2 py-1 rounded bg-primary-500/20 text-primary-300 text-xs">
+                  {action}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+        {vlResult.objects && vlResult.objects.length > 0 && (
+          <div>
+            <div className="text-xs text-white/40 mb-2">识别物体</div>
+            <div className="flex flex-wrap gap-2">
+              {vlResult.objects.map((obj, i) => (
+                <span key={i} className="px-2 py-1 rounded bg-white/10 text-white/60 text-xs">
+                  {obj}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
     </motion.div>
   )
 }

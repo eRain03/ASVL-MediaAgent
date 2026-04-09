@@ -1,8 +1,15 @@
 // API Types
 export interface TaskCreateRequest {
-  video_url: string
+  video_url?: string
   video_id?: string
   options?: TaskOptions
+}
+
+export interface VideoUploadResponse {
+  video_id: string
+  video_url: string
+  filename: string
+  size: number
 }
 
 export interface TaskOptions {
@@ -89,6 +96,16 @@ export interface AlignmentIssue {
   reason?: string
 }
 
+export interface VLResultInfo {
+  clip_id: string
+  segment_id?: string
+  vision_summary: string
+  actions: string[]
+  objects: string[]
+  scene_description?: string
+  confidence: number
+}
+
 export interface TaskResult {
   task_id: string
   video_id: string
@@ -96,6 +113,8 @@ export interface TaskResult {
   summary?: string
   duration?: number
   segments?: LLMResult[]
+  vl_results?: VLResultInfo[]
   highlights?: Highlight[]
   alignment_issues?: AlignmentIssue[]
+  asr_segments?: ASRSegment[]
 }
