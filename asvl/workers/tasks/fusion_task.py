@@ -10,7 +10,7 @@ from asvl.core.fusion import (
     SemanticEnhancer,
 )
 from asvl.core.llm.client import LLMClient
-from asvl.db.session import async_session
+from asvl.db.session import get_new_engine, get_new_session_factory
 from asvl.db.repositories.task_repo import TaskRepository
 from asvl.db.models.final_output import FinalOutputModel
 from asvl.db.models.segment_result import SegmentResultModel
@@ -28,45 +28,51 @@ settings = get_settings()
     bind=True,
     name="asvl.workers.tasks.fusion_task.process_fusion",
 )
-def process_fusion(self, task_id: str, llm_result: dict = None, vl_results: dict = None):
+def process_fusion(self, vl_results: dict, task_id: str):
     """
     多模态融合任务
 
     Args:
+        vl_results: VL结果（从上一个任务传递）
         task_id: 任务ID
-        llm_result: LLM结果（可选）
-        vl_results: VL结果（可选）
 
     Returns:
         dict: 处理结果
     """
     log.info(f"Starting Fusion task for {task_id}")
-    return asyncio.run(_process_fusion_async(self, task_id, llm_result, vl_results))
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(_process_fusion_async(self, vl_results, task_id))
+    finally:
+        loop.close()
 
 
 async def _process_fusion_async(
     task,
-    task_id: str,
-    llm_result: dict,
     vl_results: dict,
+    task_id: str,
 ) -> dict:
     """异步融合处理"""
     start_time = datetime.now()
 
+    # 为当前任务创建独立的引擎和会话工厂（在当前event loop中）
+    engine = get_new_engine()
+    session_factory = get_new_session_factory(engine)
+
     try:
         # 1. 更新任务状态
-        await _update_task_progress(task_id, "fusion", TaskStatus.PROCESSING)
+        await _update_task_progress(session_factory, task_id, "fusion", TaskStatus.PROCESSING)
 
         # 2. 获取LLM结果
-        if not llm_result:
-            llm_result = await _get_segment_result(task_id)
+        llm_result = await _get_segment_result(session_factory, task_id)
 
         if not llm_result:
             raise ValueError(f"No LLM result found for {task_id}")
 
-        # 3. 获取VL结果
-        if not vl_results:
-            vl_results = await _get_vl_results(task_id)
+        # 3. 获取VL结果（如果参数是 dict 且不是 VL 结果格式，则从数据库获取）
+        if not vl_results or (isinstance(vl_results, dict) and "task_id" in vl_results):
+            vl_results = await _get_vl_results(session_factory, task_id)
 
         # 4. 转换数据格式
         llm_segments = [
@@ -116,22 +122,36 @@ async def _process_fusion_async(
             vl_result = vl_dict.get(highlight.type.value)  # 简化匹配
             await enhancer.enhance(highlight, vl_result)
 
-        # 9. 生成摘要
-        summary = await enhancer.generate_summary(highlights)
+        # 9. 生成摘要（优先使用VL结果）
+        if vl_dict:
+            # 有VL结果，基于视觉内容生成摘要
+            vl_summaries = [vl.vision_summary for vl in vl_dict.values() if vl.vision_summary]
+            if vl_summaries:
+                summary = await _generate_vl_summary(llm_client, vl_summaries, llm_segments)
+            else:
+                summary = await enhancer.generate_summary(highlights)
+        else:
+            summary = await enhancer.generate_summary(highlights)
 
         # 10. 保存最终结果
         await _save_final_output(
+            session_factory=session_factory,
             task_id=task_id,
             summary=summary,
             highlights=highlights,
             alignment_issues=alignment_issues,
         )
 
-        # 11. 更新任务状态为完成
-        await _update_task_status(task_id, TaskStatus.COMPLETED)
+        # 11. 更新任务进度为完成
+        await _update_task_progress(session_factory, task_id, "fusion", TaskStatus.COMPLETED)
+
+        # 12. 更新任务状态为完成
+        await _update_task_status(session_factory, task_id, TaskStatus.COMPLETED)
 
         processing_time = (datetime.now() - start_time).total_seconds()
         log.info(f"Fusion task completed for {task_id}: {len(highlights)} highlights in {processing_time:.1f}s")
+
+        await engine.dispose()
 
         return {
             "task_id": task_id,
@@ -143,15 +163,16 @@ async def _process_fusion_async(
 
     except Exception as e:
         log.error(f"Fusion task failed for {task_id}: {e}")
-        await _update_task_status(task_id, TaskStatus.FAILED)
+        await _update_task_status(session_factory, task_id, TaskStatus.FAILED)
+        await engine.dispose()
         raise
 
 
-async def _get_segment_result(task_id: str) -> dict:
+async def _get_segment_result(session_factory, task_id: str) -> dict:
     """获取分段结果"""
     from sqlalchemy import select
 
-    async with async_session() as session:
+    async with session_factory() as session:
         result = await session.execute(
             select(SegmentResultModel).where(SegmentResultModel.task_id == task_id)
         )
@@ -166,19 +187,21 @@ async def _get_segment_result(task_id: str) -> dict:
         }
 
 
-async def _get_vl_results(task_id: str) -> dict:
+async def _get_vl_results(session_factory, task_id: str) -> dict:
     """获取VL结果"""
     from sqlalchemy import select
 
-    async with async_session() as session:
+    async with session_factory() as session:
         result = await session.execute(
             select(VLResultModel).where(VLResultModel.task_id == task_id)
         )
         vl_results = result.scalars().all()
 
+        # 使用segment_id作为key
         return {
-            vl.clip_id: {
+            vl.segment_id or vl.clip_id: {
                 "clip_id": vl.clip_id,
+                "segment_id": vl.segment_id,
                 "vision_summary": vl.vision_summary,
                 "actions": vl.actions or [],
                 "objects": vl.objects or [],
@@ -190,13 +213,14 @@ async def _get_vl_results(task_id: str) -> dict:
 
 
 async def _save_final_output(
+    session_factory,
     task_id: str,
     summary: str,
     highlights: List[Highlight],
     alignment_issues: List,
 ) -> None:
     """保存最终输出"""
-    async with async_session() as session:
+    async with session_factory() as session:
         # 转换为可序列化格式
         highlights_data = [
             {
@@ -241,22 +265,61 @@ async def _save_final_output(
 
 
 async def _update_task_progress(
+    session_factory,
     task_id: str,
     stage: str,
     status: TaskStatus,
 ) -> None:
     """更新任务进度"""
-    async with async_session() as session:
+    async with session_factory() as session:
         repo = TaskRepository(session)
         await repo.update_progress(task_id, stage, status)
 
 
 async def _update_task_status(
+    session_factory,
     task_id: str,
     status: TaskStatus,
     error_message: str = None,
 ) -> None:
     """更新任务状态"""
-    async with async_session() as session:
+    async with session_factory() as session:
         repo = TaskRepository(session)
         await repo.update_status(task_id, status, error_message)
+
+
+async def _generate_vl_summary(
+    llm_client: LLMClient,
+    vl_summaries: List[str],
+    llm_segments: List[LLMResult],
+) -> str:
+    """基于VL结果生成摘要"""
+    # 组合VL摘要
+    vl_text = "\n".join([f"- {s}" for s in vl_summaries[:3]])
+
+    # 获取文本内容
+    text_content = "\n".join([f"- {s.text[:100]}" for s in llm_segments[:3]])
+
+    prompt = f"""请根据以下视觉分析和文本内容，生成视频内容摘要（100字以内）：
+
+视觉分析：
+{vl_text}
+
+文本内容：
+{text_content}
+
+注意：如果视觉内容与文本内容不一致，以视觉内容为准。
+
+摘要："""
+
+    try:
+        summary = await llm_client.complete(
+            prompt=prompt,
+            temperature=0.5,
+            max_tokens=200,
+        )
+        return summary.strip()
+    except Exception as e:
+        log.error(f"VL summary generation failed: {e}")
+        # 返回VL摘要
+        return vl_summaries[0] if vl_summaries else "视频内容分析完成"
