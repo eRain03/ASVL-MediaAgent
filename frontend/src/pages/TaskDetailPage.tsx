@@ -16,7 +16,7 @@ import {
 } from 'lucide-react'
 import { taskApi } from '@/lib/api'
 import { cn, formatTimestamp, getSegmentTypeColor, getStatusColor } from '@/lib/utils'
-import type { TaskStatusResponse, TaskResult, LLMResult, Highlight, TaskProgress, VLResultInfo } from '@/types'
+import type { TaskStatusResponse, TaskResult, LLMResult, Highlight, TaskProgress, VLResultInfo, UserAttraction } from '@/types'
 import toast from 'react-hot-toast'
 
 export default function TaskDetailPage() {
@@ -344,6 +344,11 @@ function HighlightCard({ highlight, index }: { highlight: Highlight; index: numb
           </span>
         </div>
         <div className="flex items-center gap-2">
+          {highlight.audio_context && (
+            <span className="px-2 py-0.5 rounded text-xs bg-purple-500/20 text-purple-300">
+              {highlight.audio_context}
+            </span>
+          )}
           {highlight.clip_url && (
             <button className="p-2 rounded-lg bg-white/5 hover:bg-white/10 transition-colors">
               <Play className="w-4 h-4 text-white/60" />
@@ -352,6 +357,32 @@ function HighlightCard({ highlight, index }: { highlight: Highlight; index: numb
         </div>
       </div>
       <p className="text-white/80 leading-relaxed mb-2">{highlight.text}</p>
+
+      {/* 用户看点 */}
+      {highlight.user_attraction && (
+        <div className="p-3 rounded-lg bg-accent-500/10 border border-accent-500/20 mt-3">
+          <div className="flex items-center gap-2 mb-2">
+            <Sparkles className="w-4 h-4 text-accent-400" />
+            <span className="text-accent-400 text-sm font-medium">
+              用户看点：{highlight.user_attraction.attraction_type}
+            </span>
+            <span className="text-xs text-white/40">
+              {Math.round(highlight.user_attraction.confidence * 100)}% 置信度
+            </span>
+          </div>
+          <p className="text-white/70 text-sm">{highlight.user_attraction.description}</p>
+          {highlight.user_attraction.evidence && highlight.user_attraction.evidence.length > 0 && (
+            <div className="flex flex-wrap gap-2 mt-2">
+              {highlight.user_attraction.evidence.map((e, i) => (
+                <span key={i} className="px-2 py-0.5 rounded bg-white/10 text-white/50 text-xs">
+                  {e}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {highlight.visual_explanation && (
         <div className="p-3 rounded-lg bg-white/5 mt-3">
           <div className="text-xs text-accent-400 mb-1">视觉补充</div>
